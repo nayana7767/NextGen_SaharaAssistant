@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { InsertUser, users } from "../drizzle/schema";
+import { InsertUser, users, lawyers, complaints, chatMessages, caseFollowUps } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -89,4 +89,71 @@ export async function getUserByOpenId(openId: string) {
   return result.length > 0 ? result[0] : undefined;
 }
 
-// TODO: add feature queries here as your schema grows.
+// Lawyer queries
+export async function getAllLawyers() {
+  const db = await getDb();
+  if (!db) return [];
+  return await db.select().from(lawyers);
+}
+
+export async function getLawyersByCategory(category: string) {
+  const db = await getDb();
+  if (!db) return [];
+  return await db.select().from(lawyers).where(eq(lawyers.category, category as any));
+}
+
+export async function getLawyerById(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(lawyers).where(eq(lawyers.id, id)).limit(1);
+  return result.length > 0 ? result[0] : undefined;
+}
+
+// Chat message queries
+export async function saveChatMessage(userId: number, role: "user" | "assistant", content: string) {
+  const db = await getDb();
+  if (!db) return null;
+  const result = await db.insert(chatMessages).values({ userId, role, content });
+  return result;
+}
+
+export async function getChatHistory(userId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return await db.select().from(chatMessages).where(eq(chatMessages.userId, userId));
+}
+
+// Complaint queries
+export async function createComplaint(complaint: any) {
+  const db = await getDb();
+  if (!db) return null;
+  const result = await db.insert(complaints).values(complaint);
+  return result;
+}
+
+export async function getUserComplaints(userId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return await db.select().from(complaints).where(eq(complaints.userId, userId));
+}
+
+export async function getComplaintById(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(complaints).where(eq(complaints.id, id)).limit(1);
+  return result.length > 0 ? result[0] : undefined;
+}
+
+// Case follow-up queries
+export async function saveCaseFollowUp(userId: number, role: "user" | "assistant", content: string, complaintId?: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const result = await db.insert(caseFollowUps).values({ userId, role, content, complaintId });
+  return result;
+}
+
+export async function getCaseFollowUps(userId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return await db.select().from(caseFollowUps).where(eq(caseFollowUps.userId, userId));
+}

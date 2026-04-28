@@ -1,0 +1,317 @@
+import { useState, useRef } from "react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Card } from "@/components/ui/card";
+import { Textarea } from "@/components/ui/textarea";
+import { Mic, Square, Download, ArrowLeft } from "lucide-react";
+import { useLocation } from "wouter";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { trpc } from "@/lib/trpc";
+import jsPDF from "jspdf";
+
+export default function ComplaintGenerator() {
+  const [, setLocation] = useLocation();
+  const { isAuthenticated, loading: authLoading } = useAuth();
+  const [formData, setFormData] = useState({
+    name: "",
+    date: new Date().toISOString().split("T")[0],
+    location: "",
+    details: "",
+    lawyerId: ""
+  });
+  const [isListening, setIsListening] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const recognitionRef = useRef<any>(null);
+  const createComplaintMutation = trpc.complaints.create.useMutation();
+  const { data: lawyers = [] } = trpc.lawyers.getAll.useQuery();
+
+  if (authLoading) {
+    return <div className="container max-w-2xl py-6">Loading...</div>;
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <div className="container max-w-2xl py-6 text-center">
+        <h1 className="text-3xl font-bold text-primary mb-4">Generate Complaint</h1>
+        <p className="text-muted-foreground mb-6">Please log in to generate a complaint</p>
+        <Button onClick={() => setLocation("/")}>Go Home</Button>
+      </div>
+    );
+  }
+
+  const initializeSpeechRecognition = () => {
+    if (!("webkitSpeechRecognition" in window) && !("SpeechRecognition" in window)) {
+      alert("Speech Recognition is not supported in your browser.");
+      return;
+    }
+
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    recognitionRef.current = new SpeechRecognition();
+    recognitionRef.current.continuous = false;
+    recognitionRef.current.interimResults = true;
+    recognitionRef.current.lang = "en-IN";
+
+    recognitionRef.current.onstart = () => {
+      setIsListening(true);
+    };
+
+    recognitionRef.current.onresult = (event: any) => {
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const transcript = event.results[i][0].transcript;
+        if (event.results[i].isFinal) {
+          setFormData((prev) => ({ ...prev, details: prev.details + transcript }));
+        }
+      }
+    };
+
+    recognitionRef.current.onerror = (event: any) => {
+      console.error("Speech recognition error", event.error);
+      setIsListening(false);
+    };
+
+    recognitionRef.current.onend = () => {
+      setIsListening(false);
+    };
+  };
+
+  const handleVoiceInput = () => {
+    if (!recognitionRef.current) {
+      initializeSpeechRecognition();
+    }
+
+    if (isListening) {
+      recognitionRef.current?.stop();
+      setIsListening(false);
+    } else {
+      recognitionRef.current?.start();
+    }
+  };
+
+  const handleInputChange = (e: any) => {
+    const { name, value } = e.target;
+    setFormData((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const generatePDF = (complaintData: any) => {
+    const doc = new jsPDF();
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    let yPosition = 20;
+
+    // Title
+    doc.setFontSize(16);
+    doc.text("FORMAL COMPLAINT", pageWidth / 2, yPosition, { align: "center" });
+    yPosition += 15;
+
+    // Complaint Details
+    doc.setFontSize(12);
+    doc.text(`Complainant Name: ${complaintData.name}`, 20, yPosition);
+    yPosition += 10;
+    doc.text(`Date of Complaint: ${complaintData.date}`, 20, yPosition);
+    yPosition += 10;
+    doc.text(`Location: ${complaintData.location}`, 20, yPosition);
+    yPosition += 15;
+
+    // Details Section
+    doc.setFontSize(11);
+    doc.text("Details of Complaint:", 20, yPosition);
+    yPosition += 10;
+
+    const splitDetails = doc.splitTextToSize(complaintData.details, pageWidth - 40);
+    doc.text(splitDetails, 20, yPosition);
+    yPosition += splitDetails.length * 7 + 10;
+
+    // Lawyer Information
+    if (complaintData.lawyerId) {
+      const selectedLawyer = lawyers.find((l: any) => l.id === parseInt(complaintData.lawyerId));
+      if (selectedLawyer) {
+        doc.setFontSize(11);
+        doc.text("Assigned Lawyer:", 20, yPosition);
+        yPosition += 10;
+        doc.text(`Name: ${selectedLawyer.name}`, 20, yPosition);
+        yPosition += 7;
+        doc.text(`Specialization: ${selectedLawyer.specialization}`, 20, yPosition);
+        yPosition += 7;
+        if (selectedLawyer.email) {
+          doc.text(`Email: ${selectedLawyer.email}`, 20, yPosition);
+          yPosition += 7;
+        }
+        if (selectedLawyer.phone) {
+          doc.text(`Phone: ${selectedLawyer.phone}`, 20, yPosition);
+        }
+      }
+    }
+
+    // Footer
+    yPosition = pageHeight - 20;
+    doc.setFontSize(9);
+    doc.text("Generated by NextGen Sahara Assistant", pageWidth / 2, yPosition, { align: "center" });
+
+    return doc;
+  };
+
+  const handleSubmit = async (e: any) => {
+    e.preventDefault();
+    if (!formData.name || !formData.location || !formData.details) {
+      alert("Please fill in all required fields");
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const result = await createComplaintMutation.mutateAsync({
+        name: formData.name,
+        date: formData.date,
+        location: formData.location,
+        details: formData.details,
+        lawyerId: formData.lawyerId ? parseInt(formData.lawyerId) : undefined
+      });
+
+      // Generate and download PDF
+      const doc = generatePDF(formData);
+      doc.save(`complaint-${Date.now()}.pdf`);
+
+      alert("Complaint created successfully!");
+      setFormData({
+        name: "",
+        date: new Date().toISOString().split("T")[0],
+        location: "",
+        details: "",
+        lawyerId: ""
+      });
+    } catch (error) {
+      console.error("Error creating complaint:", error);
+      alert("Error creating complaint. Please try again.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <div className="container max-w-2xl py-6">
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={() => setLocation("/")}
+        className="mb-4 gap-2"
+      >
+        <ArrowLeft className="w-4 h-4" />
+        Back
+      </Button>
+
+      <h1 className="text-3xl font-bold text-primary mb-2">Generate Complaint</h1>
+      <p className="text-muted-foreground mb-6">Create a formal complaint with legal assistance</p>
+
+      <Card className="p-6">
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium mb-2">Your Name *</label>
+            <Input
+              name="name"
+              value={formData.name}
+              onChange={handleInputChange}
+              placeholder="Enter your full name"
+              required
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium mb-2">Date of Complaint *</label>
+              <Input
+                type="date"
+                name="date"
+                value={formData.date}
+                onChange={handleInputChange}
+                required
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-2">Location *</label>
+              <Input
+                name="location"
+                value={formData.location}
+                onChange={handleInputChange}
+                placeholder="City/Area"
+                required
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-2">Select Lawyer (Optional)</label>
+            <select
+              name="lawyerId"
+              value={formData.lawyerId}
+              onChange={handleInputChange}
+              className="w-full px-3 py-2 border border-input rounded-md bg-background"
+            >
+              <option value="">-- Select a lawyer --</option>
+              {lawyers.map((lawyer: any) => (
+                <option key={lawyer.id} value={lawyer.id}>
+                  {lawyer.name} - {lawyer.specialization}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-2">Complaint Details *</label>
+            <div className="flex gap-2 mb-2">
+              <Textarea
+                name="details"
+                value={formData.details}
+                onChange={handleInputChange}
+                placeholder="Describe your complaint in detail. Include dates, names, and specific incidents."
+                rows={6}
+                required
+              />
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleVoiceInput}
+              className={`gap-2 ${isListening ? "bg-red-100" : ""}`}
+            >
+              {isListening ? (
+                <>
+                  <Square className="w-4 h-4" />
+                  Stop Recording
+                </>
+              ) : (
+                <>
+                  <Mic className="w-4 h-4" />
+                  Add Voice Input
+                </>
+              )}
+            </Button>
+          </div>
+
+          {isListening && (
+            <div className="p-2 bg-blue-50 border border-blue-200 rounded-lg">
+              <p className="text-sm text-blue-800 flex items-center gap-2">
+                <span className="inline-block w-2 h-2 bg-blue-600 rounded-full animate-pulse"></span>
+                Listening... Speak now
+              </p>
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            <Button type="submit" disabled={isLoading} className="flex-1">
+              <Download className="w-4 h-4 mr-2" />
+              Generate & Download PDF
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setLocation("/lawyers")}
+            >
+              Browse Lawyers
+            </Button>
+          </div>
+        </form>
+      </Card>
+    </div>
+  );
+}
